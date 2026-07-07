@@ -1,8 +1,8 @@
 # LittleMan Timing (LM Timing)
 
-A route timing app for Assetto Corsa: build routes with custom timing gates, race them with live splits and deltas, and share them with friends
+A route timing app for Assetto Corsa: build routes with custom timing gates, race them with live splits and deltas, and share them with friends.
 
-### App Elements:
+## App Elements:
 - **Info:** An overview of each app, along with the version and developer info
 - **Delta Bar:** A visual live gap compared to your PB
 - **Routes:** Create, share, manage and see your routes
@@ -11,17 +11,17 @@ A route timing app for Assetto Corsa: build routes with custom timing gates, rac
 - **Notifications:** Pop-up alerts for run events, such as collisions
 - **Timing Gates:** Visual timing gates for the selected route
 
-### HUD:
+## HUD:
 <img src="https://i.imgur.com/AU0YtUC.png" width="820">
 <img src="https://i.imgur.com/Z8PMZ6P.jpeg" width="820">
 
 
-### Installation
+## Installation
 1. Download the latest [release](https://github.com/Littleman40/LM-Timing/releases/latest)
 2. Open Content Manager and drag & drop the downloaded .zip file
 3. Click install when prompted in the hamburger menu
 
-### Usage & Features
+## Usage & Features:
 
 **Creating routes:** Routes are created through the Routes app. Choose between a loop or point-to-point layout, then place your start line, checkpoints and finish line as you drive. Every route is fully customisable: fine-tune the position and width of each gate, restrict the route to specific cars, and limit it to specific traffic types.
 
@@ -34,5 +34,5 @@ A route timing app for Assetto Corsa: build routes with custom timing gates, rac
 > [!TIP]
 > Ensure you set the position of the pop-up notifications. This can be done through the settings app -> adjust notification position.
 
-### Bugs & Suggestions
+## Bugs & Suggestions:
 Please report any bugs or suggest new features via the [issues tab](https://github.com/Littleman40/LM-Timing/issues) or reach out to me via [Discord](https://discord.com/invite/JqBC88j2DU)
