@@ -7,7 +7,7 @@ local HEIGHT = 410
 local PADDING = 16
 
 local DEVELOPER = 'Littleman40'
-local VERSION = '1.0.0'
+local VERSION = '1.1.0'
 local DISCLAIMER = 'LMTiming is an unofficial, third-party app made for use on No Hesi servers. ' ..
     'It is not affiliated with, endorsed by, or associated with No Hesi or its creators. ' ..
     'All trademarks and game content belong to their respective owners. Use at your own risk.'

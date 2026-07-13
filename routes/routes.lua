@@ -1,6 +1,7 @@
 local S = require('core.shared')
 local gates = require('gates.gates')
 local pb = require('pb.pb')
+local ghost = require('ghost.ghost')
 
 local routes = {}
 
@@ -111,6 +112,7 @@ end
 
 local function deleteRoute(route)
     if route._file then io.deleteFile(SAVE_DIR .. '/' .. route._file) end
+    ghost.deleteAllFor(route)
     if selected == route then selected = nil end
     scan()
     view = 'list'
@@ -642,6 +644,7 @@ local function drawHistory()
     if S.button('##delpb', 'Delete PB', vec2(PADDING, deleteY), vec2(halfWidth, 36),
         { fontSize = 14, flat = true, outline = true }) then
         pb.deleteFor(route)
+        ghost.deleteFor(route)
     end
     if S.button('##delroute', 'Delete Route', vec2(PADDING + halfWidth + 8, deleteY), vec2(halfWidth, 36),
         { fontSize = 14, flat = true, outline = true }) then

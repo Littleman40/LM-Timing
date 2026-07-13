@@ -79,6 +79,7 @@ function S.init()
         renderDistance = 170,
         restartOnStart = true,
         showResetButton = false,
+        showGhost = true,
         showNotifications = true,
         adjustNotifyPos = false,
         notifyX = 0.5,

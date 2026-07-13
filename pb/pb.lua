@@ -2,11 +2,17 @@ local S = require('core.shared')
 
 local pb = {}
 
+local changeListeners = {}
+
+function pb.onChanged(listener)
+    changeListeners[#changeListeners + 1] = listener
+end
+
 local function routeKey(route)
     return 'LMT_pb_' .. ((route.name or 'route'):gsub('[^%w_]', '_'))
 end
 
-local function carKeyFor(route)
+function pb.carKeyFor(route)
     if route.carRestrict and route.carRestrict ~= '' then return 'fixed' end
     return ac.getCarID(0) or 'unknown'
 end
@@ -45,7 +51,7 @@ local function copyList(source)
 end
 
 function pb.load(route)
-    local rec = loadAll(route)[carKeyFor(route)] or blank()
+    local rec = loadAll(route)[pb.carKeyFor(route)] or blank()
 
     if not validList(rec.splits) and validList(rec.lastSplits) and rec.lastTime == rec.time then
         rec.splits = copyList(rec.lastSplits)
@@ -61,7 +67,7 @@ end
 
 function pb.save(route, rec)
     local all = loadAll(route)
-    all[carKeyFor(route)] = rec
+    all[pb.carKeyFor(route)] = rec
     local store, key = proxy(route)
     store[key] = stringify(all, true)
 end
@@ -127,10 +133,13 @@ end
 
 function pb.deleteFor(route)
     local all = loadAll(route)
-    all[carKeyFor(route)] = nil
+    all[pb.carKeyFor(route)] = nil
     local store, key = proxy(route)
     store[key] = stringify(all, true)
     proxies[key] = nil
+    for i = 1, #changeListeners do
+        changeListeners[i](route)
+    end
 end
 
 return pb

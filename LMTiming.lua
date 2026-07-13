@@ -3,6 +3,7 @@ local gates = require('gates.gates')
 local routes = require('routes.routes')
 local timing = require('timing.timing')
 local delta = require('delta.delta')
+local ghost = require('ghost.ghost')
 local settings = require('settings.settings')
 local main = require('main.main')
 local banner = require('banner.banner')
@@ -15,6 +16,7 @@ local function bootstrap()
     S.init()
     settings.init()
     routes.init()
+    ghost.init()
     timing.init()
     delta.init()
     main.init()
@@ -29,6 +31,7 @@ end
 
 render.on('main.track.transparent', function()
     if not started then return end
+    ghost.draw()
     if routes.isCreating() then
         gates.draw(routes.getCreationGates())
     else

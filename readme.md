@@ -10,6 +10,7 @@ A route timing app for Assetto Corsa: build routes with custom timing gates, rac
 - **Timing:** The core timing app with live splits and deltas
 - **Notifications:** Pop-up alerts for run events, such as collisions
 - **Timing Gates:** Visual timing gates for the selected route
+- **Ghosts:** Race against your own translucent ghost
 
 ## HUD:
 <img src="https://i.imgur.com/AU0YtUC.png" width="820">

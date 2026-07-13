@@ -2,6 +2,7 @@ local S = require('core.shared')
 local gates = require('gates.gates')
 local routes = require('routes.routes')
 local pb = require('pb.pb')
+local ghost = require('ghost.ghost')
 
 local timing = {}
 
@@ -40,6 +41,29 @@ local LOOP_FINISH_ARM = 3
 local START_LABEL_SWITCH = 5
 local BANNER_SECS = 3
 
+local SMOOTH_JUMP_THRESHOLD = 0.2
+local SMOOTH_DECAY_SECONDS = 0.8
+
+local liveDeltaRaw = nil
+local liveDeltaShown = nil
+local liveDeltaSmoothOffset = 0
+
+local legacyPbDistAtSplit = {}
+local legacyAnchorPbDist = 0
+local legacyAnchorRunDist = 0
+local legacyClampDist = nil
+local legacyTraceCursor = 2
+
+local function resetDeltaState()
+    liveDeltaRaw = nil
+    liveDeltaShown = nil
+    liveDeltaSmoothOffset = 0
+    legacyAnchorPbDist = 0
+    legacyAnchorRunDist = 0
+    legacyClampDist = nil
+    legacyTraceCursor = 2
+end
+
 local function resetRun()
     state = READY
     currentTime = 0
@@ -49,6 +73,8 @@ local function resetRun()
     runDistance = 0
     trace = {}
     invalidReason = nil
+    ghost.abortRun()
+    resetDeltaState()
     if route then gates.resetRuntime(route.gates) end
 end
 
@@ -57,11 +83,117 @@ local function invalidate(reason)
     state = INVALID
     invalidReason = reason
     invalidAt = os.clock()
+    ghost.abortRun()
     if route then
         rec = pb.recordPartial(route, splits) or rec
         gates.resetRuntime(route.gates)
     end
     ac.log('[LMTiming] run invalidated: ' .. reason)
+end
+
+-- legacy delta for old pbs set with v1.0.0
+local function setupLegacyCompare()
+    legacyPbDistAtSplit = {}
+    legacyAnchorPbDist = 0
+    legacyAnchorRunDist = 0
+    legacyTraceCursor = 2
+    legacyClampDist = nil
+
+    local tracePoints = compareRecord and compareRecord.trace
+    if not tracePoints or #tracePoints < 2 then return end
+
+    local pbSplits = compareRecord.splits or {}
+    local index = 2
+    for i = 1, #checkpoints do
+        local splitTime = pbSplits[i]
+        if not splitTime then break end
+        while index <= #tracePoints and tracePoints[index].t < splitTime do
+            index = index + 1
+        end
+        if index > #tracePoints then
+            legacyPbDistAtSplit[i] = tracePoints[#tracePoints].d
+        else
+            local before = tracePoints[index - 1]
+            local after = tracePoints[index]
+            local fraction = (splitTime - before.t) / math.max(after.t - before.t, 0.0001)
+            legacyPbDistAtSplit[i] = before.d + (after.d - before.d) * fraction
+        end
+    end
+
+    legacyClampDist = legacyPbDistAtSplit[1] or tracePoints[#tracePoints].d
+end
+
+local function legacyLiveDelta()
+    local tracePoints = compareRecord and compareRecord.trace
+    if not tracePoints or #tracePoints < 2 then return nil end
+
+    local pbDistance = legacyAnchorPbDist + (runDistance - legacyAnchorRunDist)
+    if legacyClampDist then pbDistance = math.min(pbDistance, legacyClampDist) end
+
+    if pbDistance <= tracePoints[1].d then
+        return currentTime - tracePoints[1].t
+    end
+    local lastPoint = tracePoints[#tracePoints]
+    if pbDistance >= lastPoint.d then
+        return currentTime - lastPoint.t
+    end
+
+    local index = legacyTraceCursor
+    if index < 2 or index > #tracePoints or tracePoints[index - 1].d > pbDistance then
+        index = 2
+    end
+    while tracePoints[index].d < pbDistance do
+        index = index + 1
+    end
+    legacyTraceCursor = index
+
+    local before = tracePoints[index - 1]
+    local after = tracePoints[index]
+    local fraction = (pbDistance - before.d) / math.max(after.d - before.d, 0.0001)
+    return currentTime - (before.t + (after.t - before.t) * fraction)
+end
+
+local function anchorDeltaAtCheckpoint(index)
+    if ghost.hasCompare() then
+        local pbSplit = compareRecord and compareRecord.splits and compareRecord.splits[index]
+        if pbSplit then ghost.syncToTime(pbSplit) end
+        return
+    end
+
+    if legacyPbDistAtSplit[index] then
+        legacyAnchorPbDist = legacyPbDistAtSplit[index]
+        legacyAnchorRunDist = runDistance
+    end
+    local tracePoints = compareRecord and compareRecord.trace
+    local traceEnd = tracePoints and #tracePoints > 0 and tracePoints[#tracePoints].d or nil
+    legacyClampDist = legacyPbDistAtSplit[index + 1] or traceEnd
+end
+
+-- the new delta system
+local function updateLiveDelta(dt, pos)
+    if state ~= RUNNING then
+        liveDeltaRaw = nil
+        liveDeltaShown = nil
+        return
+    end
+
+    local raw
+    if ghost.hasCompare() then
+        raw = ghost.liveDelta(pos, currentTime)
+    else
+        raw = legacyLiveDelta()
+    end
+
+    if raw and liveDeltaRaw then
+        local jump = raw - liveDeltaRaw
+        if math.abs(jump) > SMOOTH_JUMP_THRESHOLD then
+            liveDeltaSmoothOffset = liveDeltaSmoothOffset + jump
+        end
+    end
+    liveDeltaRaw = raw
+
+    liveDeltaSmoothOffset = liveDeltaSmoothOffset * math.exp(-dt / SMOOTH_DECAY_SECONDS)
+    liveDeltaShown = raw and (raw - liveDeltaSmoothOffset) or nil
 end
 
 local function beginRun()
@@ -73,13 +205,24 @@ local function beginRun()
     splits = {}
     runDistance = 0
     trace = { { d = 0, t = 0 } }
+    resetDeltaState()
+    setupLegacyCompare()
+    ghost.beginRun()
     if route then gates.resetRuntime(route.gates) end
 end
 
 local function finishRun()
     state = FINISHED
     trace[#trace + 1] = { d = runDistance, t = currentTime }
+    local improved = not rec or not rec.time or currentTime < rec.time
     rec = pb.recordRun(route, currentTime, splits, trace)
+    if improved then
+        local car = ac.getCar(0)
+        if car then ghost.recordFrame(currentTime, car, true) end
+        ghost.saveRecording(route, currentTime)
+    else
+        ghost.discardRecording()
+    end
     if route then gates.resetRuntime(route.gates) end
     ac.log('[LMTiming] run finished: ' .. S.formatTime(currentTime))
 end
@@ -115,6 +258,7 @@ local function syncRoute()
         checkpoints = {}
     end
 
+    ghost.setContext(route)
     compareRecord = rec
     resetRun()
 end
@@ -131,6 +275,13 @@ timing.canStart = canStart
 function timing.init()
     ac.onCarCollision(0, function()
         invalidate('collision')
+    end)
+    pb.onChanged(function(changedRoute)
+        if route and changedRoute == route then
+            rec = pb.load(route)
+            compareRecord = rec
+            resetRun()
+        end
     end)
     ac.log('[LMTiming] timing module initialised')
 end
@@ -180,12 +331,15 @@ function timing.update(dt)
             trace[#trace + 1] = { d = runDistance, t = currentTime }
         end
 
+        ghost.recordFrame(currentTime, car)
+
         if nextCheckpoint <= #checkpoints then
             local gate = checkpoints[nextCheckpoint]
             if gates.crossed(gate, pos, lastPos, speed) then
                 splits[nextCheckpoint] = currentTime
                 gate.crossed = true
                 gate.crossedAt = os.clock()
+                anchorDeltaAtCheckpoint(nextCheckpoint)
                 nextCheckpoint = nextCheckpoint + 1
             end
         end
@@ -214,6 +368,9 @@ function timing.update(dt)
         end
     end
 
+    updateLiveDelta(dt, pos)
+    ghost.update(state == RUNNING, currentTime, pos)
+
     lastPos = pos:clone()
 end
 
@@ -240,26 +397,7 @@ end
 
 function timing.liveDelta()
     if state ~= RUNNING then return nil end
-    if not compareRecord or not compareRecord.trace or #compareRecord.trace < 2 then return nil end
-
-    local tracePoints = compareRecord.trace
-    if runDistance <= tracePoints[1].d then
-        return currentTime - tracePoints[1].t
-    end
-    if runDistance >= tracePoints[#tracePoints].d then
-        return currentTime - tracePoints[#tracePoints].t
-    end
-
-    for i = 2, #tracePoints do
-        if tracePoints[i].d >= runDistance then
-            local before = tracePoints[i - 1]
-            local after = tracePoints[i]
-            local fraction = (runDistance - before.d) / math.max(after.d - before.d, 0.001)
-            return currentTime - (before.t + (after.t - before.t) * fraction)
-        end
-    end
-
-    return nil
+    return liveDeltaShown
 end
 
 function timing.gateLabel(gate)

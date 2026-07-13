@@ -3,7 +3,7 @@ local S = require('core.shared')
 local settings = {}
 
 local WIDTH = 360
-local HEIGHT = 714
+local HEIGHT = 782
 local PADDING = 18
 
 function settings.init() end
@@ -91,6 +91,12 @@ function settings.window()
     y = y + 36
 
     appSettings.adjustNotifyPos = toggleRow('##tNotifyPos', 'Adjust Notification Position', y, appSettings.adjustNotifyPos)
+    y = y + 36
+
+    sectionHeading('Ghost Car', nil, y)
+    y = y + 32
+
+    appSettings.showGhost = toggleRow('##tGhost', 'Show Ghost Car', y, appSettings.showGhost)
     y = y + 36
 
     sectionHeading('Run', nil, y)
