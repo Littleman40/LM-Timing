@@ -7,7 +7,7 @@ local HEIGHT = 410
 local PADDING = 16
 
 local DEVELOPER = 'Littleman40'
-local VERSION = '1.1.0'
+local VERSION = '1.1.1'
 local DISCLAIMER = 'LMTiming is an unofficial, third-party app made for use on No Hesi servers. ' ..
     'It is not affiliated with, endorsed by, or associated with No Hesi or its creators. ' ..
     'All trademarks and game content belong to their respective owners. Use at your own risk.'
@@ -26,7 +26,7 @@ function main.window()
     S.windowBackground(vec2(WIDTH, HEIGHT), 16)
 
     S.text('LMTiming', 22, vec2(PADDING, 15), S.head.bold, S.colors.text)
-    S.closeX(vec2(WIDTH, HEIGHT), 'LMT Info')
+    S.closeButton(vec2(WIDTH, HEIGHT), 'LMT Info')
     S.line(vec2(PADDING, 52), vec2(WIDTH - PADDING, 52), S.colors.line, 1)
     local y = 66
 
@@ -48,7 +48,7 @@ function main.window()
     S.text('Disclaimer:', 12, vec2(PADDING, y), S.head.semibold, S.colors.textFaint)
     y = y + 20
     ui.pushDWriteFont(S.fonts.regular)
-    S.dclip(DISCLAIMER, 12, vec2(PADDING, y), vec2(WIDTH - PADDING, HEIGHT - PADDING),
+    S.textClipped(DISCLAIMER, 12, vec2(PADDING, y), vec2(WIDTH - PADDING, HEIGHT - PADDING),
         ui.Alignment.Start, ui.Alignment.Start, true, S.colors.textFaint)
     ui.popDWriteFont()
 end

@@ -19,27 +19,35 @@ local typeColor = {
 }
 gates.typeColor = typeColor
 
-function gates.surfaceAt(pos)
+
+function gates.groundBelow(pos)
     local origin = pos + vec3(0, 2, 0)
     local hitPos = vec3()
     local hitNormal = vec3()
+
     local dist = render.createRay(origin, vec3(0, -1, 0), 6):physics(hitPos, hitNormal)
     if dist >= 0 then return hitPos:clone() end
+
     return pos:clone()
 end
+
 
 function gates.create(gateType, width)
     local car = ac.getCar(0)
     if not car then return nil end
 
-    local ground = gates.surfaceAt(car.position)
+    local ground = gates.groundBelow(car.position)
+
     local forward = vec3(car.look.x, 0, car.look.z):normalize()
+
     return { type = gateType, pos = ground, normal = forward, width = width or DEFAULT_WIDTH }
 end
+
 
 local function rightOf(gate)
     return vec3(-gate.normal.z, 0, gate.normal.x)
 end
+
 
 function gates.drawOutlineFrame(gate, color)
     local up = vec3(0, 1, 0)
@@ -60,11 +68,13 @@ function gates.drawOutlineFrame(gate, color)
 
     render.setDepthMode(S.settings.gateXray and render.DepthMode.Off or render.DepthMode.Normal)
     render.setBlendMode(render.BlendMode.AlphaBlend)
+
     bar(bottomLeft, bottomRight, up)
     bar(topLeft, topRight, up)
     bar(bottomLeft, topLeft, right)
     bar(bottomRight, topRight, right)
 end
+
 
 local function defaultLabel(gate)
     if gate.type == 'start' then
@@ -77,7 +87,8 @@ local function defaultLabel(gate)
     return nil
 end
 
-function gates.drawOne(gate, labelFor)
+
+function gates.drawGate(gate, labelFor)
     if gate.type == 'start' and not S.settings.showStart then return end
     if gate.type == 'checkpoint' and not S.settings.showCheckpoint then return end
     if gate.type == 'finish' and not S.settings.showFinish then return end
@@ -105,15 +116,18 @@ function gates.drawOne(gate, labelFor)
     end
 end
 
+
 function gates.draw(list, labelFor)
     if not list then return end
     for i = 1, #list do
-        gates.drawOne(list[i], labelFor)
+        gates.drawGate(list[i], labelFor)
     end
 end
 
+
 function gates.crossed(gate, carPos, lastPos, speed)
     if lastPos == nil then return false end
+
 
     local normal = gate.normal
     local distCurrent = (carPos.x - gate.pos.x) * normal.x + (carPos.z - gate.pos.z) * normal.z
@@ -124,6 +138,7 @@ function gates.crossed(gate, carPos, lastPos, speed)
     local lineX = -normal.z
     local lineZ = normal.x
     local along = (carPos.x - gate.pos.x) * lineX + (carPos.z - gate.pos.z) * lineZ
+
     if math.abs(along) > (gate.width or DEFAULT_WIDTH) * 0.5 then return false end
 
     if math.abs(carPos.y - gate.pos.y) > GATE_HEIGHT then return false end
@@ -133,7 +148,7 @@ function gates.crossed(gate, carPos, lastPos, speed)
     return true
 end
 
-function gates.resetRuntime(list)
+function gates.clearCrossedFlags(list)
     if not list then return end
     for i = 1, #list do
         list[i].crossed = nil

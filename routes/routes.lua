@@ -33,33 +33,39 @@ end
 
 local draft = newDraft()
 
-local function sanitize(name)
+local function sanitizeFileName(name)
     return (name or 'route'):gsub('[^%w_]', '_')
 end
 
-local function scan()
+
+local function scanSavedRoutes()
     routeList = {}
+
     local ok, files = pcall(io.scanDir, SAVE_DIR, '*.lua')
     if ok and files then
         for _, file in ipairs(files) do
             local data = io.load(SAVE_DIR .. '/' .. file)
             local route = stringify.tryParse(data, nil, nil)
+
             if route and route.gates then
                 route._file = file
                 routeList[#routeList + 1] = route
             end
         end
     end
+
     listLoaded = true
     ac.log('[LMTiming] routes scanned: ' .. #routeList)
 end
 
-local function nameExists(name)
+
+local function routeNameExists(name)
     for _, route in ipairs(routeList) do
         if (route.name or ''):lower() == name:lower() then return true end
     end
     return false
 end
+
 
 local function draftGateList()
     local gateList = {}
@@ -88,7 +94,7 @@ local function saveDraft()
     if draft.name:match('^%s*$') then return end
     if not draft.start then return end
     if draft.type == 'p2p' and not draft.finish then return end
-    if nameExists(draft.name) then return end
+    if routeNameExists(draft.name) then return end
 
     local route = {
         name = draft.name,
@@ -102,25 +108,28 @@ local function saveDraft()
     }
 
     io.createDir(SAVE_DIR)
-    local ok = io.save(SAVE_DIR .. '/' .. sanitize(route.name) .. '.lua', stringify(route))
+    local ok = io.save(SAVE_DIR .. '/' .. sanitizeFileName(route.name) .. '.lua', stringify(route))
     if ok then
         draft = newDraft()
-        scan()
+        scanSavedRoutes()
         view = 'list'
     end
 end
 
+
 local function deleteRoute(route)
     if route._file then io.deleteFile(SAVE_DIR .. '/' .. route._file) end
-    ghost.deleteAllFor(route)
+    ghost.deleteAllRecordings(route)
+
     if selected == route then selected = nil end
-    scan()
+
+    scanSavedRoutes()
     view = 'list'
 end
 
 function routes.init()
     pcall(io.createDir, SAVE_DIR)
-    scan()
+    scanSavedRoutes()
     ac.log('[LMTiming] routes module initialised')
 end
 
@@ -141,7 +150,7 @@ function routes.trackMatches(route)
 end
 
 function routes.carMatches(route)
-    local allowedCars = S.splitList(route.carRestrict)
+    local allowedCars = S.splitCommaList(route.carRestrict)
     if #allowedCars == 0 then return true end
 
     local currentCar = (ac.getCarID(0) or ''):lower()
@@ -156,24 +165,29 @@ local function inputField(id, value, pos, width, height)
     height = height or 28
     local scale = S.scale
     local fontSize = 15
+
     local bottomRight = pos + vec2(width, height)
     S.rectFill(pos, bottomRight, S.colors.button, 6)
     S.rect(pos, bottomRight, S.colors.border, 6, ui.CornerFlags.All, 1)
 
     S.cursor(pos)
     S.itemWidth(width)
+
     local paddingY = math.max(0, (height * scale - ui.fontSize()) * 0.5)
     ui.pushStyleVar(ui.StyleVar.FramePadding, vec2(8 * scale, paddingY))
+
     ui.pushStyleColor(ui.StyleColor.Text, rgbm(0, 0, 0, 0))
     ui.pushStyleColor(ui.StyleColor.FrameBg, rgbm(0, 0, 0, 0))
     ui.pushStyleColor(ui.StyleColor.FrameBgHovered, rgbm(0, 0, 0, 0))
     ui.pushStyleColor(ui.StyleColor.FrameBgActive, rgbm(0, 0, 0, 0))
     ui.pushStyleColor(ui.StyleColor.TextSelectedBg, rgbm(0, 0, 0, 0))
+
     local edited = ui.inputText(id, value, ui.InputTextFlags.None)
     local active = ui.itemActive()
     if active then
         ui.inputTextCommand('setText', edited)
     end
+
     ui.popStyleColor(5)
     ui.popStyleVar()
 
@@ -187,7 +201,7 @@ local function inputField(id, value, pos, width, height)
 
     local overflow = textWidth > areaWidth
     ui.pushDWriteFont(S.fonts.regular)
-    S.dclip(edited, fontSize, vec2(pos.x + 8, pos.y), vec2(pos.x + 8 + areaWidth, pos.y + height),
+    S.textClipped(edited, fontSize, vec2(pos.x + 8, pos.y), vec2(pos.x + 8 + areaWidth, pos.y + height),
         overflow and ui.Alignment.End or ui.Alignment.Start, ui.Alignment.Center, false, S.colors.text)
     ui.popDWriteFont()
 
@@ -203,38 +217,43 @@ end
 local function toggleInList(str, item)
     local kept = {}
     local found = false
-    for _, entry in ipairs(S.splitList(str)) do
+    for _, entry in ipairs(S.splitCommaList(str)) do
         if entry == item then
             found = true
         else
             kept[#kept + 1] = entry
         end
     end
+
     if not found then
         kept[#kept + 1] = item
     end
     return table.concat(kept, ', ')
 end
 
+
 local function listHas(str, item)
-    for _, entry in ipairs(S.splitList(str)) do
+    for _, entry in ipairs(S.splitCommaList(str)) do
         if entry == item then return true end
     end
     return false
 end
 
+
 local function label(text, pos)
     S.text(text, 12, pos, S.head.semibold, S.colors.textFaint)
 end
 
-local function startCreate()
+
+local function openCreateView()
     draft = newDraft()
     draft.author = ac.getDriverName(0)
     selected = nil
     view = 'create'
 end
 
-local function drawList()
+
+local function drawListView()
     local y = S.header('Routes', vec2(WIDTH, windowHeight), { windowTitle = 'LMT Routes' })
 
     local barHeight = 36
@@ -246,7 +265,7 @@ local function drawList()
     end
     if S.button('##newroute', 'Create Route', vec2(PADDING + halfWidth + 8, barY), vec2(halfWidth, barHeight),
         { primary = true, fontSize = 14 }) then
-        startCreate()
+        openCreateView()
     end
 
     if #routeList == 0 then
@@ -254,16 +273,20 @@ local function drawList()
         return
     end
 
+
     local listHeight = math.max(60, (barY - 10) - y)
-    S.child('##routelist', vec2(PADDING, y), vec2(WIDTH - PADDING * 2, listHeight), function()
-        local contentWidth = S.availX()
+    S.scrollArea('##routelist', vec2(PADDING, y), vec2(WIDTH - PADDING * 2, listHeight), function()
+        local contentWidth = S.availableWidth()
         local rowHeight = 90
         local gap = 10
         local rowY = 0
         for _, route in ipairs(routeList) do
             local isSelected = selected == route
+
+
             S.rectFill(vec2(0, rowY), vec2(contentWidth, rowY + rowHeight), S.colors.row, 10)
             S.rect(vec2(0, rowY), vec2(contentWidth, rowY + rowHeight), S.colors.border, 10, ui.CornerFlags.All, 1)
+
 
             local buttonWidth = 96
             local buttonHeight = 30
@@ -276,6 +299,7 @@ local function drawList()
                 historyRoute = route
                 view = 'history'
             end
+
             if S.button('##load' .. route.name, isSelected and 'Loaded' or 'Load',
                 vec2(buttonX, buttonY + buttonHeight + buttonGap), vec2(buttonWidth, buttonHeight),
                 { fontSize = 14, flat = true, outline = true, primary = isSelected }) then
@@ -305,37 +329,38 @@ local function drawList()
             local textY = rowY + (rowHeight - blockHeight) * 0.5
 
             ui.pushDWriteFont(S.head.bold)
-            S.dclip(route.name or '?', 20, vec2(textX, textY), vec2(textMax, textY + nameHeight),
+            S.textClipped(route.name or '?', 20, vec2(textX, textY), vec2(textMax, textY + nameHeight),
                 ui.Alignment.Start, ui.Alignment.Center, false, S.colors.text)
             ui.popDWriteFont()
             textY = textY + nameHeight
 
             ui.pushDWriteFont(S.fonts.regular)
-            S.dclip(meta, 15, vec2(textX, textY), vec2(textMax, textY + metaHeight),
+            S.textClipped(meta, 15, vec2(textX, textY), vec2(textMax, textY + metaHeight),
                 ui.Alignment.Start, ui.Alignment.Center, false, S.colors.textDim)
             ui.popDWriteFont()
             textY = textY + metaHeight
 
             if chip then
                 ui.pushDWriteFont(chipFont)
-                S.dclip(chip, 12, vec2(textX, textY), vec2(textMax, textY + 16),
+                S.textClipped(chip, 12, vec2(textX, textY), vec2(textMax, textY + 16),
                     ui.Alignment.Start, ui.Alignment.Start, false, chipColor)
                 ui.popDWriteFont()
             end
 
             rowY = rowY + rowHeight + gap
         end
+
         S.cursorY(rowY)
         ui.dummy(vec2(1, 1))
     end)
 end
 
-local function drawCreate()
+local function drawCreateView()
     if S.backArrow('##back') then
         view = 'list'
     end
     S.text('Create Route', 19, vec2(42, 13), S.head.bold, S.colors.text)
-    S.closeX(vec2(WIDTH, windowHeight), 'LMT Routes')
+    S.closeButton(vec2(WIDTH, windowHeight), 'LMT Routes')
     S.line(vec2(PADDING, 46), vec2(WIDTH - PADDING, 46), S.colors.line, 1)
     local y = 56
 
@@ -400,8 +425,8 @@ local function drawCreate()
     end
     local listHeight = math.max(60, (placeRowY - 10) - listTop)
 
-    S.child('##gatelist', vec2(PADDING, listTop), vec2(WIDTH - PADDING * 2, listHeight), function()
-        local contentWidth = S.availX()
+    S.scrollArea('##gatelist', vec2(PADDING, listTop), vec2(WIDTH - PADDING * 2, listHeight), function()
+        local contentWidth = S.availableWidth()
         local rowY = 0
         local CARD_HEIGHT = 92
 
@@ -410,6 +435,7 @@ local function drawCreate()
                 local buttonX = isPlus and (cellX + cellWidth - 20) or cellX
                 local clicked = S.button('##' .. id .. suffix, '', vec2(buttonX, cellY), vec2(20, 20),
                     { flat = true, outline = true })
+
                 local centerX = buttonX + 10
                 local centerY = cellY + 10
                 local armLength = 5
@@ -444,6 +470,7 @@ local function drawCreate()
             local function chevron(suffix, isUp, x, onClick)
                 local clicked = S.button('##' .. suffix .. text, '', vec2(x, rowY + 7), vec2(22, 20),
                     { flat = true, outline = true })
+
                 local centerX = x + 11
                 local centerY = rowY + 17
                 local arrowHalfWidth = 4
@@ -454,6 +481,7 @@ local function drawCreate()
                 S.line(vec2(centerX, tipY), vec2(centerX + arrowHalfWidth, armY), S.colors.text, 1)
                 if clicked then onClick() end
             end
+
             buttonX = buttonX - 26
             if onMoveDown then
                 chevron('dn', false, buttonX, onMoveDown)
@@ -552,25 +580,26 @@ local function drawCreate()
     end
 end
 
-local function drawHistory()
+local function drawHistoryView()
     local route = historyRoute
     if not route then return end
+
     if S.backArrow('##hback') then
         view = 'list'
     end
     S.text(route.name or 'Route', 19, vec2(42, 13), S.head.bold, S.colors.text)
-    S.closeX(vec2(WIDTH, windowHeight), 'LMT Routes')
+    S.closeButton(vec2(WIDTH, windowHeight), 'LMT Routes')
     S.line(vec2(PADDING, 46), vec2(WIDTH - PADDING, 46), S.colors.line, 1)
     local y = 58
 
-    local rec = pb.load(route)
+    local record = pb.load(route)
     local halfWidth = (WIDTH - PADDING * 2 - 8) * 0.5
     local columnTwo = PADDING + halfWidth + 6
 
     local function detail(labelText, value, x, detailRowY)
         label(labelText, vec2(x, detailRowY))
         ui.pushDWriteFont(S.fonts.medium)
-        S.dclip(value, 14, vec2(x, detailRowY + 16), vec2(x + halfWidth - 8, detailRowY + 34),
+        S.textClipped(value, 14, vec2(x, detailRowY + 16), vec2(x + halfWidth - 8, detailRowY + 34),
             ui.Alignment.Start, ui.Alignment.Start, false, S.colors.text)
         ui.popDWriteFont()
     end
@@ -584,9 +613,9 @@ local function drawHistory()
     y = detailY + 104
 
     label('PERSONAL BEST', vec2(PADDING, y))
-    S.text(S.formatTime(rec.time), 26, vec2(PADDING, y + 18), S.mono.bold, S.colors.accent)
+    S.text(S.formatTime(record.time), 26, vec2(PADDING, y + 18), S.mono.bold, S.colors.accent)
     label('THEORETICAL BEST', vec2(columnTwo, y))
-    S.text(S.formatTime(pb.theoretical(rec)), 26, vec2(columnTwo, y + 18), S.mono.bold, S.colors.textFaint)
+    S.text(S.formatTime(pb.theoreticalBest(record)), 26, vec2(columnTwo, y + 18), S.mono.bold, S.colors.textFaint)
     y = y + 64
 
     local COLUMN_OFFSET = 104
@@ -606,32 +635,33 @@ local function drawHistory()
 
     local deleteY = windowHeight - 52
     local listHeight = math.max(60, (deleteY - 12) - y)
-    S.child('##histsplits', vec2(PADDING, y), vec2(WIDTH - PADDING * 2, listHeight), function()
-        local contentWidth = S.availX()
+    S.scrollArea('##histsplits', vec2(PADDING, y), vec2(WIDTH - PADDING * 2, listHeight), function()
+        local contentWidth = S.availableWidth()
         local theoreticalRight = contentWidth - RIGHT_MARGIN
         local pbRight = theoreticalRight - COLUMN_OFFSET
         local rowY = 0
         for i, name in ipairs(checkpointNames) do
             local rowHeight = 28
+
             local rowColor = (i % 2 == 1) and S.colors.row or rgbm(0, 0, 0, 0)
             S.rectFill(vec2(0, rowY), vec2(contentWidth, rowY + rowHeight), rowColor, 4)
 
-            local best = rec.best and rec.best[i]
-            local pbSplit = rec.splits and rec.splits[i]
+            local best = record.best and record.best[i]
+            local pbSplit = record.splits and record.splits[i]
             if i == #checkpointNames then
-                best = pb.theoretical(rec)
-                pbSplit = rec.time
+                best = pb.theoreticalBest(record)
+                pbSplit = record.time
             end
 
             ui.pushDWriteFont(S.fonts.medium)
-            S.dclip(name, 15, vec2(8, rowY), vec2(pbRight - 90, rowY + rowHeight),
+            S.textClipped(name, 15, vec2(8, rowY), vec2(pbRight - 90, rowY + rowHeight),
                 ui.Alignment.Start, ui.Alignment.Center, false, S.colors.text)
             ui.popDWriteFont()
 
             ui.pushDWriteFont(S.mono.regular)
-            S.dclip(S.formatTime(best), 15, vec2(pbRight - 97, rowY), vec2(pbRight, rowY + rowHeight),
+            S.textClipped(S.formatTime(best), 15, vec2(pbRight - 97, rowY), vec2(pbRight, rowY + rowHeight),
                 ui.Alignment.Start, ui.Alignment.Center, false, S.colors.textFaint)
-            S.dclip(S.formatTime(pbSplit), 15, vec2(pbRight, rowY), vec2(theoreticalRight, rowY + rowHeight),
+            S.textClipped(S.formatTime(pbSplit), 15, vec2(pbRight, rowY), vec2(theoreticalRight, rowY + rowHeight),
                 ui.Alignment.End, ui.Alignment.Center, false, S.colors.accent)
             ui.popDWriteFont()
 
@@ -643,8 +673,8 @@ local function drawHistory()
 
     if S.button('##delpb', 'Delete PB', vec2(PADDING, deleteY), vec2(halfWidth, 36),
         { fontSize = 14, flat = true, outline = true }) then
-        pb.deleteFor(route)
-        ghost.deleteFor(route)
+        pb.deleteRecord(route)
+        ghost.deleteRecording(route)
     end
     if S.button('##delroute', 'Delete Route', vec2(PADDING + halfWidth + 8, deleteY), vec2(halfWidth, 36),
         { fontSize = 14, flat = true, outline = true }) then
@@ -652,12 +682,12 @@ local function drawHistory()
     end
 end
 
-local function drawShare()
+local function drawShareView()
     if S.backArrow('##shback') then
         view = 'list'
     end
     S.text('Import / Export', 19, vec2(42, 13), S.head.bold, S.colors.text)
-    S.closeX(vec2(WIDTH, windowHeight), 'LMT Routes')
+    S.closeButton(vec2(WIDTH, windowHeight), 'LMT Routes')
     S.line(vec2(PADDING, 46), vec2(WIDTH - PADDING, 46), S.colors.line, 1)
     local y = 60
 
@@ -667,7 +697,7 @@ local function drawShare()
         'To import a route a friend sent you, drop their .lua file into that same ' ..
         'folder, and the next time you start the game, it will show up.'
     ui.pushDWriteFont(S.fonts.regular)
-    S.dclip(body, 14, vec2(PADDING, y), vec2(WIDTH - PADDING, y + 150),
+    S.textClipped(body, 14, vec2(PADDING, y), vec2(WIDTH - PADDING, y + 150),
         ui.Alignment.Start, ui.Alignment.Start, true, S.colors.textDim)
     ui.popDWriteFont()
     y = y + 150
@@ -678,7 +708,7 @@ local function drawShare()
     S.rectFill(vec2(PADDING, y), vec2(WIDTH - PADDING, y + chipHeight), S.colors.button, 6)
     S.rect(vec2(PADDING, y), vec2(WIDTH - PADDING, y + chipHeight), S.colors.border, 6, ui.CornerFlags.All, 1)
     ui.pushDWriteFont(S.mono.regular)
-    S.dclip(SAVE_DIR, 12, vec2(PADDING + 8, y), vec2(WIDTH - PADDING - 8, y + chipHeight),
+    S.textClipped(SAVE_DIR, 12, vec2(PADDING + 8, y), vec2(WIDTH - PADDING - 8, y + chipHeight),
         ui.Alignment.Start, ui.Alignment.Center, false, S.colors.text)
     ui.popDWriteFont()
     y = y + chipHeight + 12
@@ -696,7 +726,7 @@ end
 
 function routes.window()
     if not listLoaded then
-        scan()
+        scanSavedRoutes()
     end
 
     local scale = S.applyScaleInput('lmt_routes')
@@ -707,13 +737,13 @@ function routes.window()
     S.windowBackground(vec2(WIDTH, windowHeight), 16)
 
     if view == 'create' then
-        drawCreate()
+        drawCreateView()
     elseif view == 'history' and historyRoute then
-        drawHistory()
+        drawHistoryView()
     elseif view == 'share' then
-        drawShare()
+        drawShareView()
     else
-        drawList()
+        drawListView()
     end
 
     S.resizeHandle('lmt_routes', vec2(WIDTH, windowHeight), MIN_HEIGHT, maxHeight)

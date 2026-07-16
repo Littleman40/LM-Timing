@@ -20,11 +20,12 @@ local state = READY
 local resetFlashAt = -1
 
 local route
-local rec
+local pbRecord
 local compareRecord
 local startGate
 local finishGate
 local checkpoints = {}
+
 local splits = {}
 local nextCheckpoint = 1
 local startClock = 0
@@ -32,9 +33,6 @@ local currentTime = 0
 local lastPos
 local invalidReason
 local invalidAt = -1
-local runDistance = 0
-local trace = {}
-local TRACE_STEP = 3
 
 local TELEPORT_THRESHOLD = 40
 local LOOP_FINISH_ARM = 3
@@ -48,21 +46,23 @@ local liveDeltaRaw = nil
 local liveDeltaShown = nil
 local liveDeltaSmoothOffset = 0
 
-local legacyPbDistAtSplit = {}
-local legacyAnchorPbDist = 0
-local legacyAnchorRunDist = 0
-local legacyClampDist = nil
-local legacyTraceCursor = 2
+local bannerInfo = {
+    collision = { text = 'Run Ended - Collision Detected', icon = 'assets/Collision.png', accent = 'red' },
+    pits = { text = 'Run Ended - Reset to Pits', icon = 'assets/RedWarning.png', accent = 'red' },
+    missed = { text = 'Missed Checkpoint', icon = 'assets/YellowWarning.png', accent = 'yellow' },
+}
+
+timing.bannerInfo = bannerInfo
+
+local notifyReason = nil
+local notifyUntil = -1
 
 local function resetDeltaState()
     liveDeltaRaw = nil
     liveDeltaShown = nil
     liveDeltaSmoothOffset = 0
-    legacyAnchorPbDist = 0
-    legacyAnchorRunDist = 0
-    legacyClampDist = nil
-    legacyTraceCursor = 2
 end
+
 
 local function resetRun()
     state = READY
@@ -70,106 +70,37 @@ local function resetRun()
     startClock = 0
     splits = {}
     nextCheckpoint = 1
-    runDistance = 0
-    trace = {}
     invalidReason = nil
     ghost.abortRun()
     resetDeltaState()
-    if route then gates.resetRuntime(route.gates) end
+    if route then gates.clearCrossedFlags(route.gates) end
 end
 
-local function invalidate(reason)
+
+local function invalidateRun(reason)
     if state ~= RUNNING then return end
+
     state = INVALID
     invalidReason = reason
     invalidAt = os.clock()
     ghost.abortRun()
+
     if route then
-        rec = pb.recordPartial(route, splits) or rec
-        gates.resetRuntime(route.gates)
+        pbRecord = pb.recordPartial(route, splits) or pbRecord
+        gates.clearCrossedFlags(route.gates)
     end
     ac.log('[LMTiming] run invalidated: ' .. reason)
 end
 
--- legacy delta for old pbs set with v1.0.0
-local function setupLegacyCompare()
-    legacyPbDistAtSplit = {}
-    legacyAnchorPbDist = 0
-    legacyAnchorRunDist = 0
-    legacyTraceCursor = 2
-    legacyClampDist = nil
-
-    local tracePoints = compareRecord and compareRecord.trace
-    if not tracePoints or #tracePoints < 2 then return end
-
-    local pbSplits = compareRecord.splits or {}
-    local index = 2
-    for i = 1, #checkpoints do
-        local splitTime = pbSplits[i]
-        if not splitTime then break end
-        while index <= #tracePoints and tracePoints[index].t < splitTime do
-            index = index + 1
-        end
-        if index > #tracePoints then
-            legacyPbDistAtSplit[i] = tracePoints[#tracePoints].d
-        else
-            local before = tracePoints[index - 1]
-            local after = tracePoints[index]
-            local fraction = (splitTime - before.t) / math.max(after.t - before.t, 0.0001)
-            legacyPbDistAtSplit[i] = before.d + (after.d - before.d) * fraction
-        end
-    end
-
-    legacyClampDist = legacyPbDistAtSplit[1] or tracePoints[#tracePoints].d
-end
-
-local function legacyLiveDelta()
-    local tracePoints = compareRecord and compareRecord.trace
-    if not tracePoints or #tracePoints < 2 then return nil end
-
-    local pbDistance = legacyAnchorPbDist + (runDistance - legacyAnchorRunDist)
-    if legacyClampDist then pbDistance = math.min(pbDistance, legacyClampDist) end
-
-    if pbDistance <= tracePoints[1].d then
-        return currentTime - tracePoints[1].t
-    end
-    local lastPoint = tracePoints[#tracePoints]
-    if pbDistance >= lastPoint.d then
-        return currentTime - lastPoint.t
-    end
-
-    local index = legacyTraceCursor
-    if index < 2 or index > #tracePoints or tracePoints[index - 1].d > pbDistance then
-        index = 2
-    end
-    while tracePoints[index].d < pbDistance do
-        index = index + 1
-    end
-    legacyTraceCursor = index
-
-    local before = tracePoints[index - 1]
-    local after = tracePoints[index]
-    local fraction = (pbDistance - before.d) / math.max(after.d - before.d, 0.0001)
-    return currentTime - (before.t + (after.t - before.t) * fraction)
-end
-
+-- re-anchors the ghost's delta projection when a checkpoint is crossed
 local function anchorDeltaAtCheckpoint(index)
-    if ghost.hasCompare() then
-        local pbSplit = compareRecord and compareRecord.splits and compareRecord.splits[index]
-        if pbSplit then ghost.syncToTime(pbSplit) end
-        return
-    end
+    if not ghost.hasRecording() then return end
 
-    if legacyPbDistAtSplit[index] then
-        legacyAnchorPbDist = legacyPbDistAtSplit[index]
-        legacyAnchorRunDist = runDistance
-    end
-    local tracePoints = compareRecord and compareRecord.trace
-    local traceEnd = tracePoints and #tracePoints > 0 and tracePoints[#tracePoints].d or nil
-    legacyClampDist = legacyPbDistAtSplit[index + 1] or traceEnd
+    local pbSplit = compareRecord and compareRecord.splits and compareRecord.splits[index]
+    if pbSplit then ghost.syncToTime(pbSplit) end
 end
 
--- the new delta system
+
 local function updateLiveDelta(dt, pos)
     if state ~= RUNNING then
         liveDeltaRaw = nil
@@ -177,11 +108,9 @@ local function updateLiveDelta(dt, pos)
         return
     end
 
-    local raw
-    if ghost.hasCompare() then
+    local raw = nil
+    if ghost.hasRecording() then
         raw = ghost.liveDelta(pos, currentTime)
-    else
-        raw = legacyLiveDelta()
     end
 
     if raw and liveDeltaRaw then
@@ -197,25 +126,25 @@ local function updateLiveDelta(dt, pos)
 end
 
 local function beginRun()
-    compareRecord = rec
+    compareRecord = pbRecord
+
     state = RUNNING
     startClock = os.clock()
     currentTime = 0
     nextCheckpoint = 1
     splits = {}
-    runDistance = 0
-    trace = { { d = 0, t = 0 } }
     resetDeltaState()
-    setupLegacyCompare()
     ghost.beginRun()
-    if route then gates.resetRuntime(route.gates) end
+    if route then gates.clearCrossedFlags(route.gates) end
 end
+
 
 local function finishRun()
     state = FINISHED
-    trace[#trace + 1] = { d = runDistance, t = currentTime }
-    local improved = not rec or not rec.time or currentTime < rec.time
-    rec = pb.recordRun(route, currentTime, splits, trace)
+
+    local improved = not pbRecord or not pbRecord.time or currentTime < pbRecord.time
+    pbRecord = pb.recordRun(route, currentTime, splits)
+
     if improved then
         local car = ac.getCar(0)
         if car then ghost.recordFrame(currentTime, car, true) end
@@ -223,11 +152,13 @@ local function finishRun()
     else
         ghost.discardRecording()
     end
-    if route then gates.resetRuntime(route.gates) end
+
+    if route then gates.clearCrossedFlags(route.gates) end
     ac.log('[LMTiming] run finished: ' .. S.formatTime(currentTime))
 end
 
-local function syncRoute()
+
+local function syncSelectedRoute()
     local selected = routes.getSelected()
     if selected == route then return end
 
@@ -235,7 +166,8 @@ local function syncRoute()
     lastPos = nil
 
     if route then
-        rec = pb.load(route)
+        pbRecord = pb.load(route)
+
         startGate = nil
         finishGate = nil
         checkpoints = {}
@@ -248,20 +180,22 @@ local function syncRoute()
                 checkpoints[#checkpoints + 1] = gate
             end
         end
+
         if route.type == 'loop' then
             finishGate = startGate
         end
     else
-        rec = nil
+        pbRecord = nil
         startGate = nil
         finishGate = nil
         checkpoints = {}
     end
 
-    ghost.setContext(route)
-    compareRecord = rec
+    ghost.setRoute(route)
+    compareRecord = pbRecord
     resetRun()
 end
+
 
 local function canStart()
     if not route then return false, 'No route loaded' end
@@ -270,16 +204,18 @@ local function canStart()
     if not S.serverHasTraffic(route.traffic) then return false, 'Requires ' .. route.traffic .. ' traffic' end
     return true
 end
+
 timing.canStart = canStart
 
 function timing.init()
     ac.onCarCollision(0, function()
-        invalidate('collision')
+        invalidateRun('collision')
     end)
+
     pb.onChanged(function(changedRoute)
         if route and changedRoute == route then
-            rec = pb.load(route)
-            compareRecord = rec
+            pbRecord = pb.load(route)
+            compareRecord = pbRecord
             resetRun()
         end
     end)
@@ -292,7 +228,7 @@ function timing.update(dt)
         resetRun()
     end
 
-    syncRoute()
+    syncSelectedRoute()
     if not route then return end
 
     local car = ac.getCar(0)
@@ -313,7 +249,7 @@ function timing.update(dt)
         local dz = pos.z - lastPos.z
         local step = math.sqrt(dx * dx + dz * dz)
         if step > TELEPORT_THRESHOLD then
-            invalidate('pits')
+            invalidateRun('pits')
             lastPos = pos:clone()
             return
         end
@@ -323,12 +259,6 @@ function timing.update(dt)
             beginRun()
             lastPos = pos:clone()
             return
-        end
-
-        runDistance = runDistance + step
-        local lastDistance = trace[#trace] and trace[#trace].d or 0
-        if runDistance - lastDistance >= TRACE_STEP then
-            trace[#trace + 1] = { d = runDistance, t = currentTime }
         end
 
         ghost.recordFrame(currentTime, car)
@@ -374,7 +304,7 @@ function timing.update(dt)
     lastPos = pos:clone()
 end
 
-function timing.active()
+function timing.isRunning()
     return state == RUNNING
 end
 
@@ -395,10 +325,12 @@ function timing.currentDelta()
     return splits[lastIndex] - compareRecord.splits[lastIndex]
 end
 
+
 function timing.liveDelta()
     if state ~= RUNNING then return nil end
     return liveDeltaShown
 end
+
 
 function timing.gateLabel(gate)
     if gate.type == 'start' then
@@ -408,12 +340,14 @@ function timing.gateLabel(gate)
             end
             return 'Start Line', gates.typeColor.start
         end
+
         if state == RUNNING then
             if S.settings.restartOnStart then
                 return 'Start Line', gates.typeColor.start
             end
             return 'Already Started a Run', gates.typeColor.start
         end
+
         return 'Start Run: ' .. (route and route.name or ''), gates.typeColor.start
     elseif gate.type == 'checkpoint' then
         return 'Checkpoint #' .. (gate.index or 1), gates.typeColor.checkpoint
@@ -421,16 +355,6 @@ function timing.gateLabel(gate)
         return 'Finish Line', gates.typeColor.finish
     end
 end
-
-local bannerInfo = {
-    collision = { text = 'Run Ended - Collision Detected', icon = 'assets/Collision.png', accent = 'red' },
-    pits = { text = 'Run Ended - Reset to Pits', icon = 'assets/RedWarning.png', accent = 'red' },
-    missed = { text = 'Missed Checkpoint', icon = 'assets/YellowWarning.png', accent = 'yellow' },
-}
-timing.bannerInfo = bannerInfo
-
-local notifyReason = nil
-local notifyUntil = -1
 
 function timing.notify(reason, seconds)
     notifyReason = reason
@@ -441,17 +365,20 @@ function timing.debugShowBanner(reason, seconds)
     timing.notify(reason, seconds or 4)
 end
 
+
 function timing.activeBanner()
     if (os.clock() < notifyUntil) and notifyReason then
         return bannerInfo[notifyReason] or bannerInfo.collision
     end
+
     if state == INVALID and invalidReason and (os.clock() - invalidAt) < BANNER_SECS then
         return bannerInfo[invalidReason] or bannerInfo.collision
     end
     return nil
 end
 
-local function drawBigTime(str, rightX, y)
+
+local function drawBigTimer(str, rightX, y)
     local dot = str:find('%.')
     local whole = dot and str:sub(1, dot - 1) or str
     local fraction = dot and str:sub(dot) or ''
@@ -471,6 +398,7 @@ local function drawBigTime(str, rightX, y)
         S.text(fraction, 26, vec2(x + wholeWidth + 2, y + 16), S.mono.medium, S.colors.text)
     end
 end
+
 
 function timing.window()
     local scale = S.applyScaleInput('lmt_timing')
@@ -497,7 +425,7 @@ function timing.window()
         S.text(S.formatDelta(delta), 24, vec2(PADDING, y + 16), S.mono.medium,
             delta < 0 and S.colors.accent or S.colors.red)
     end
-    drawBigTime(S.formatTime(currentTime), WIDTH - PADDING - 16, y)
+    drawBigTimer(S.formatTime(currentTime), WIDTH - PADDING - 16, y)
     y = y + 56
 
     local ok, reason = canStart()
@@ -535,8 +463,8 @@ function timing.window()
     y = y + 24
 
     local listHeight = math.max(60, (currentHeight - belowList) - y)
-    S.child('##splits', vec2(PADDING, y), vec2(innerWidth, listHeight), function()
-        local contentWidth = S.availX()
+    S.scrollArea('##splits', vec2(PADDING, y), vec2(innerWidth, listHeight), function()
+        local contentWidth = S.availableWidth()
         local rowY = 0
         local rowIndex = 0
 
@@ -544,25 +472,26 @@ function timing.window()
             rowIndex = rowIndex + 1
             local hasTime = time ~= nil
             local rowHeight = 26
+
             local rowColor = (rowIndex % 2 == 1) and S.colors.row or rgbm(0, 0, 0, 0)
             S.rectFill(vec2(0, rowY), vec2(contentWidth, rowY + rowHeight), rowColor, 4)
 
             local nameColor = hasTime and S.colors.text or S.colors.textFaint
             ui.pushDWriteFont(S.fonts.medium)
-            S.dclip(name, 15, vec2(6, rowY), vec2(nameRight, rowY + rowHeight),
+            S.textClipped(name, 15, vec2(6, rowY), vec2(nameRight, rowY + rowHeight),
                 ui.Alignment.Start, ui.Alignment.Center, false, nameColor)
             ui.popDWriteFont()
 
             if hasTime and pbTime then
                 local deltaValue = time - pbTime
                 ui.pushDWriteFont(S.mono.medium)
-                S.dclip(S.formatDelta(deltaValue), 15, vec2(nameRight, rowY), vec2(deltaRight, rowY + rowHeight),
+                S.textClipped(S.formatDelta(deltaValue), 15, vec2(nameRight, rowY), vec2(deltaRight, rowY + rowHeight),
                     ui.Alignment.End, ui.Alignment.Center, false, deltaValue < 0 and S.colors.accent or S.colors.red)
                 ui.popDWriteFont()
             end
 
             ui.pushDWriteFont(S.mono.regular)
-            S.dclip(S.formatTime(time), 15, vec2(deltaRight, rowY), vec2(timeRight, rowY + rowHeight),
+            S.textClipped(S.formatTime(time), 15, vec2(deltaRight, rowY), vec2(timeRight, rowY + rowHeight),
                 ui.Alignment.End, ui.Alignment.Center, false, nameColor)
             ui.popDWriteFont()
 
@@ -576,7 +505,8 @@ function timing.window()
 
         S.cursorY(rowY)
         ui.dummy(vec2(1, 1))
-    end)
+    end
+    )
 
     if resetButtonVisible then
         local flashing = (os.clock() - resetFlashAt) < 0.1

@@ -13,8 +13,10 @@ local function slider(id, pos, width, value, minValue, maxValue, disabled)
     local p1 = vec2(pos.x, pos.y + 8)
     local p2 = vec2(pos.x + width, pos.y + 8 + trackHeight)
     local fraction = (value - minValue) / (maxValue - minValue)
+
     local fill = disabled and rgbm(0.4, 0.4, 0.4, 1) or S.colors.accent
     local knob = disabled and rgbm(0.55, 0.55, 0.55, 1) or rgbm(1, 1, 1, 1)
+
     S.rectFill(p1, p2, rgbm(1, 1, 1, 0.1), 3)
     S.rectFill(p1, vec2(pos.x + width * fraction, p2.y), fill, 3)
     S.circle(vec2(pos.x + width * fraction, pos.y + 11), 8, knob)
@@ -22,6 +24,7 @@ local function slider(id, pos, width, value, minValue, maxValue, disabled)
     if not disabled then
         ui.setCursor(pos * S.scale)
         ui.invisibleButton(id, vec2(width, 22) * S.scale)
+
         if ui.itemActive() then
             local mouseX = (ui.mousePos().x - ui.windowPos().x) / S.scale
             value = minValue + math.clamp((mouseX - pos.x) / width, 0, 1) * (maxValue - minValue)
@@ -34,6 +37,7 @@ local function slider(id, pos, width, value, minValue, maxValue, disabled)
     return value
 end
 
+
 local function sectionHeading(title, description, y)
     S.text(title, 16, vec2(PADDING, y), S.head.bold, S.colors.text)
     if description then
@@ -41,6 +45,7 @@ local function sectionHeading(title, description, y)
         S.text(description, 12, vec2(PADDING + titleWidth + 10, y + 4), S.fonts.regular, S.colors.textFaint)
     end
 end
+
 
 local function toggleRow(id, text, y, value, dotColor)
     if dotColor then
@@ -93,7 +98,7 @@ function settings.window()
     appSettings.adjustNotifyPos = toggleRow('##tNotifyPos', 'Adjust Notification Position', y, appSettings.adjustNotifyPos)
     y = y + 36
 
-    sectionHeading('Ghost Car', nil, y)
+    sectionHeading('Ghost Car', 'needs a saved PB', y)
     y = y + 32
 
     appSettings.showGhost = toggleRow('##tGhost', 'Show Ghost Car', y, appSettings.showGhost)

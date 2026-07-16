@@ -18,7 +18,8 @@ local MAX_ALPHA = 0.3
 local TINT = vec3(0.53333, 0.0, 0.94118)
 
 local context = nil
-local data = nil
+
+local pbData = nil
 local frameCount = 0
 
 local recording = nil
@@ -34,6 +35,7 @@ local meshParams = {
     transform = mat4x4.identity(),
     textures = {},
     values = { gTint = TINT, gAlpha = MAX_ALPHA },
+
     shader = [[
         float4 main(PS_IN pin) {
             return float4((pin.NormalW.yyy + 1) * gTint * gWhiteRefPoint, gAlpha * pin.FogAlphaMultiplier());
@@ -41,71 +43,82 @@ local meshParams = {
     ]]
 }
 
+
 local function sanitize(name)
     return (name or 'route'):gsub('[^%w_]', '_')
 end
 
-local function fileFor(route)
+
+local function recordingPath(route)
     return GHOST_DIR .. '/' .. sanitize(route.name) .. '__' .. sanitize(pb.carKeyFor(route)) .. '.ghost'
 end
+
 
 local function frameBase(index)
     return (index - 1) * FRAME_STRIDE
 end
 
+
 local function frameTime(index)
-    return data.frames[frameBase(index) + 1]
+    return pbData.frames[frameBase(index) + 1]
 end
+
 
 local function framePosition(index, out)
     local base = frameBase(index)
-    return out:set(data.frames[base + 2], data.frames[base + 3], data.frames[base + 4])
+    return out:set(pbData.frames[base + 2], pbData.frames[base + 3], pbData.frames[base + 4])
 end
 
-local function resolveShape()
+
+local function resolveCarShape()
     meshParams.mesh = nil
-    if not data then return end
+    if not pbData then return end
 
     local shapeCarIndex = nil
     local sim = ac.getSim()
     for i = 0, sim.carsCount - 1 do
-        if ac.getCarID(i) == data.carId then
+        if ac.getCarID(i) == pbData.carId then
             shapeCarIndex = i
             break
         end
     end
+
     if shapeCarIndex == nil then
         shapeCarIndex = 0
-        ac.log('[LMTiming] ghost: PB car ' .. tostring(data.carId) .. ' is not in this session, using the player car shape')
+        ac.log('[LMTiming] ghost: PB car ' .. tostring(pbData.carId) .. ' is not in this session, using the player car shape')
     end
 
     meshParams.mesh = ac.SimpleMesh.carShape(shapeCarIndex, true)
 end
+
 
 function ghost.init()
     pcall(io.createDir, GHOST_DIR)
     ac.log('[LMTiming] ghost module initialised')
 end
 
-function ghost.setContext(route)
+
+function ghost.setRoute(route)
     ghost.abortRun()
-    data = nil
+    pbData = nil
     frameCount = 0
     context = nil
 
     if not route then
-        resolveShape()
+        resolveCarShape()
         return
     end
 
-    context = { route = route, file = fileFor(route) }
+    context = { route = route, file = recordingPath(route) }
+
 
     local raw = io.load(context.file, nil)
     if raw then
         local parsed = stringify.binary.tryParse(raw, nil)
+
         if parsed and parsed.version == FORMAT_VERSION and parsed.carId
                 and type(parsed.frames) == 'table' and #parsed.frames >= FRAME_STRIDE * 2 then
-            data = parsed
+            pbData = parsed
             frameCount = math.floor(#parsed.frames / FRAME_STRIDE)
             ac.log('[LMTiming] ghost: loaded ' .. frameCount .. ' frames for ' .. (route.name or '?'))
         else
@@ -113,12 +126,14 @@ function ghost.setContext(route)
         end
     end
 
-    resolveShape()
+    resolveCarShape()
 end
 
-function ghost.hasCompare()
-    return data ~= nil and frameCount >= 2
+
+function ghost.hasRecording()
+    return pbData ~= nil and frameCount >= 2
 end
+
 
 function ghost.beginRun()
     playCursor = 1
@@ -128,14 +143,17 @@ function ghost.beginRun()
     drawAlpha = 0
 end
 
+
 function ghost.abortRun()
     recording = nil
     recordingLastTime = nil
     drawAlpha = 0
 end
 
+
 function ghost.recordFrame(elapsed, car, force)
     if not recording then return end
+
     if not force and recordingLastTime and (elapsed - recordingLastTime) < SAMPLE_INTERVAL then return end
     recordingLastTime = elapsed
 
@@ -157,10 +175,12 @@ function ghost.recordFrame(elapsed, car, force)
     recording[n + 10] = up.z
 end
 
+
 function ghost.discardRecording()
     recording = nil
     recordingLastTime = nil
 end
+
 
 function ghost.saveRecording(route, runTime)
     local frames = recording
@@ -178,14 +198,15 @@ function ghost.saveRecording(route, runTime)
         frames = frames,
     }
 
+
     pcall(io.createDir, GHOST_DIR)
     local ok = io.save(context.file, stringify.binary(saved))
     if ok then
-        data = saved
+        pbData = saved
         frameCount = math.floor(#frames / FRAME_STRIDE)
         playCursor = 1
         projectionCursor = 1
-        resolveShape()
+        resolveCarShape()
         ac.log('[LMTiming] ghost: saved recording (' .. frameCount .. ' frames)')
     else
         ac.log('[LMTiming] ghost: failed to save recording')
@@ -196,6 +217,7 @@ local samplePos0 = vec3()
 local samplePos1 = vec3()
 local sampleLook = vec3()
 local sampleUp = vec3()
+
 
 local function sampleAtTime(elapsed)
     if elapsed <= frameTime(1) then
@@ -211,13 +233,13 @@ local function sampleAtTime(elapsed)
 
     local baseA = frameBase(playCursor)
     local baseB = frameBase(playCursor + 1)
-    local timeA = data.frames[baseA + 1]
-    local timeB = data.frames[baseB + 1]
+    local timeA = pbData.frames[baseA + 1]
+    local timeB = pbData.frames[baseB + 1]
     local mix = math.clamp((elapsed - timeA) / math.max(timeB - timeA, 0.0001), 0, 1)
 
     local function lerpComponent(offset)
-        local a = data.frames[baseA + offset]
-        local b = data.frames[baseB + offset]
+        local a = pbData.frames[baseA + offset]
+        local b = pbData.frames[baseB + offset]
         return a + (b - a) * mix
     end
 
@@ -227,9 +249,11 @@ local function sampleAtTime(elapsed)
     return samplePos0, sampleLook, sampleUp
 end
 
+
 function ghost.update(running, elapsed, playerPos)
     drawAlpha = 0
-    if not ghost.hasCompare() or meshParams.mesh == nil then return end
+
+    if not ghost.hasRecording() or meshParams.mesh == nil then return end
     if not running or not S.settings.showGhost or ac.getSim().isReplayActive then return end
 
     local position, look, up = sampleAtTime(elapsed)
@@ -251,6 +275,7 @@ function ghost.update(running, elapsed, playerPos)
     drawAlpha = MAX_ALPHA * fade
 end
 
+
 function ghost.draw()
     if drawAlpha <= 0.005 then return end
 
@@ -261,8 +286,9 @@ function ghost.draw()
     render.mesh(meshParams)
 end
 
+
 function ghost.liveDelta(carPos, elapsed)
-    if not ghost.hasCompare() then return nil end
+    if not ghost.hasRecording() then return nil end
 
     local carX = carPos.x
     local carZ = carPos.z
@@ -276,6 +302,7 @@ function ghost.liveDelta(carPos, elapsed)
     framePosition(from, samplePos0)
     for i = from, to do
         framePosition(i + 1, samplePos1)
+
         local segX = samplePos1.x - samplePos0.x
         local segZ = samplePos1.z - samplePos0.z
         local lengthSq = segX * segX + segZ * segZ
@@ -305,8 +332,9 @@ function ghost.liveDelta(carPos, elapsed)
     return elapsed - ghostTime
 end
 
+
 function ghost.syncToTime(pbTime)
-    if not ghost.hasCompare() then return end
+    if not ghost.hasRecording() then return end
 
     local low = 1
     local high = frameCount
@@ -318,20 +346,24 @@ function ghost.syncToTime(pbTime)
             high = mid - 1
         end
     end
+
     projectionCursor = math.min(low, frameCount - 1)
 end
 
-function ghost.deleteFor(route)
-    pcall(io.deleteFile, fileFor(route))
+
+function ghost.deleteRecording(route)
+    pcall(io.deleteFile, recordingPath(route))
+
     if context and context.route == route then
         ghost.abortRun()
-        data = nil
+        pbData = nil
         frameCount = 0
-        resolveShape()
+        resolveCarShape()
     end
 end
 
-function ghost.deleteAllFor(route)
+
+function ghost.deleteAllRecordings(route)
     local prefix = sanitize(route.name) .. '__'
     local ok, files = pcall(io.scanDir, GHOST_DIR, '*.ghost')
     if ok and files then
@@ -341,11 +373,12 @@ function ghost.deleteAllFor(route)
             end
         end
     end
+
     if context and context.route == route then
         ghost.abortRun()
-        data = nil
+        pbData = nil
         frameCount = 0
-        resolveShape()
+        resolveCarShape()
     end
 end
 

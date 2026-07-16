@@ -1,5 +1,3 @@
-local S = require('core.shared')
-
 local pb = {}
 
 local changeListeners = {}
@@ -19,7 +17,7 @@ end
 
 local proxies = {}
 
-local function proxy(route)
+local function storageFor(route)
     local key = routeKey(route)
     if not proxies[key] then
         proxies[key] = ac.storage({ [key] = '' })
@@ -27,16 +25,16 @@ local function proxy(route)
     return proxies[key], key
 end
 
-local function loadAll(route)
-    local store, key = proxy(route)
+local function loadAllRecords(route)
+    local store, key = storageFor(route)
     return stringify.tryParse(store[key], nil, {}) or {}
 end
 
-local function blank()
+local function blankRecord()
     return { time = nil, splits = {}, best = {}, bestSectors = {}, lastTime = nil, lastSplits = {} }
 end
 
-local function validList(value)
+local function isPlainList(value)
     return type(value) == 'table' and value.type == nil
 end
 
@@ -51,92 +49,95 @@ local function copyList(source)
 end
 
 function pb.load(route)
-    local rec = loadAll(route)[pb.carKeyFor(route)] or blank()
+    local record = loadAllRecords(route)[pb.carKeyFor(route)] or blankRecord()
 
-    if not validList(rec.splits) and validList(rec.lastSplits) and rec.lastTime == rec.time then
-        rec.splits = copyList(rec.lastSplits)
+    if not isPlainList(record.splits) and isPlainList(record.lastSplits) and record.lastTime == record.time then
+        record.splits = copyList(record.lastSplits)
     end
+    if not isPlainList(record.splits) then record.splits = {} end
+    if not isPlainList(record.lastSplits) then record.lastSplits = {} end
+    if not isPlainList(record.best) then record.best = {} end
+    if not isPlainList(record.bestSectors) then record.bestSectors = {} end
 
-    if not validList(rec.splits) then rec.splits = {} end
-    if not validList(rec.lastSplits) then rec.lastSplits = {} end
-    if not validList(rec.best) then rec.best = {} end
-    if not validList(rec.bestSectors) then rec.bestSectors = {} end
-
-    return rec
+    return record
 end
 
-function pb.save(route, rec)
-    local all = loadAll(route)
-    all[pb.carKeyFor(route)] = rec
-    local store, key = proxy(route)
+function pb.save(route, record)
+    local all = loadAllRecords(route)
+    all[pb.carKeyFor(route)] = record
+    local store, key = storageFor(route)
     store[key] = stringify(all, true)
 end
 
-local function foldBests(rec, splits, finalSector)
-    rec.best = rec.best or {}
-    rec.bestSectors = rec.bestSectors or {}
+local function updateBests(record, splits, finalSector)
+    record.best = record.best or {}
+    record.bestSectors = record.bestSectors or {}
 
     local previous = 0
     for i = 1, #splits do
-        if not rec.best[i] or splits[i] < rec.best[i] then
-            rec.best[i] = splits[i]
+        if not record.best[i] or splits[i] < record.best[i] then
+            record.best[i] = splits[i]
         end
+
         local sector = splits[i] - previous
-        if not rec.bestSectors[i] or sector < rec.bestSectors[i] then
-            rec.bestSectors[i] = sector
+        if not record.bestSectors[i] or sector < record.bestSectors[i] then
+            record.bestSectors[i] = sector
         end
         previous = splits[i]
     end
 
     if finalSector then
         local i = #splits + 1
-        if not rec.bestSectors[i] or finalSector < rec.bestSectors[i] then
-            rec.bestSectors[i] = finalSector
+        if not record.bestSectors[i] or finalSector < record.bestSectors[i] then
+            record.bestSectors[i] = finalSector
         end
     end
 end
 
-function pb.recordRun(route, time, splits, trace)
-    local rec = pb.load(route)
-    rec.lastTime = time
-    rec.lastSplits = copyList(splits)
+function pb.recordRun(route, time, splits)
+    local record = pb.load(route)
 
-    if not rec.time or time < rec.time then
-        rec.time = time
-        rec.splits = copyList(splits)
-        rec.trace = trace
+    record.lastTime = time
+    record.lastSplits = copyList(splits)
+
+    if not record.time or time < record.time then
+        record.time = time
+        record.splits = copyList(splits)
+        record.trace = nil
     end
 
-    foldBests(rec, splits, time - (splits[#splits] or 0))
-    pb.save(route, rec)
-    return rec
+    updateBests(record, splits, time - (splits[#splits] or 0))
+    pb.save(route, record)
+    return record
 end
 
 function pb.recordPartial(route, splits)
     if not splits or #splits == 0 then return nil end
 
-    local rec = pb.load(route)
-    foldBests(rec, splits, nil)
-    pb.save(route, rec)
-    return rec
+    local record = pb.load(route)
+    updateBests(record, splits, nil)
+    pb.save(route, record)
+    return record
 end
 
-function pb.theoretical(rec)
-    if not rec or not rec.bestSectors or #rec.bestSectors == 0 then return nil end
+function pb.theoreticalBest(record)
+    if not record or not record.bestSectors or #record.bestSectors == 0 then return nil end
 
     local sum = 0
-    for i = 1, #rec.bestSectors do
-        sum = sum + rec.bestSectors[i]
+    for i = 1, #record.bestSectors do
+        sum = sum + record.bestSectors[i]
     end
     return sum
 end
 
-function pb.deleteFor(route)
-    local all = loadAll(route)
+function pb.deleteRecord(route)
+    local all = loadAllRecords(route)
     all[pb.carKeyFor(route)] = nil
-    local store, key = proxy(route)
+    local store, key = storageFor(route)
     store[key] = stringify(all, true)
+
     proxies[key] = nil
+
     for i = 1, #changeListeners do
         changeListeners[i](route)
     end

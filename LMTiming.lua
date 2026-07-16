@@ -13,6 +13,7 @@ local started = false
 local function bootstrap()
     if started then return end
     started = true
+
     S.init()
     settings.init()
     routes.init()
@@ -31,7 +32,9 @@ end
 
 render.on('main.track.transparent', function()
     if not started then return end
+
     ghost.draw()
+
     if routes.isCreating() then
         gates.draw(routes.getCreationGates())
     else

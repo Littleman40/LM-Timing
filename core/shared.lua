@@ -49,11 +49,12 @@ S.resetButton = nil
 S.scale = 1
 S.SCALE_MIN = 0.5
 S.SCALE_MAX = 2.0
-S.SCALE_STEP = 0.1
+S.SCALE_STEP = 0.05
 S.winScale = nil
+
 S._currentWindowId = nil
-S._zoomGuard = {}
-S._accessors = {}
+S._zoomBlocked = {}
+S._windowHandles = {}
 S._resizeActive = {}
 S._resizeGrab = {}
 
@@ -82,6 +83,7 @@ function S.init()
         showGhost = true,
         showNotifications = true,
         adjustNotifyPos = false,
+
         notifyX = 0.5,
         notifyY = 0.08,
     }
@@ -90,6 +92,12 @@ function S.init()
     ac.log('[LMTiming] core.shared initialised')
 end
 
+S.WINDOW_IDS = { 'lmt_main', 'lmt_timing', 'lmt_routes', 'lmt_delta', 'lmt_settings' }
+S.TRAFFIC_TYPES = { 'Light', 'Realistic', 'Heavy', 'Rush Hour' }
+
+
+
+-- handles zoom from wheel scrolling
 function S.applyScaleInput(id)
     S._currentWindowId = id
 
@@ -98,7 +106,7 @@ function S.applyScaleInput(id)
 
     if ui.windowHovered(ui.HoveredFlags.ChildWindows) then
         local wheel = ui.mouseWheel()
-        if wheel ~= 0 and not S._zoomGuard[id] then
+        if wheel ~= 0 and not S._zoomBlocked[id] then
             scale = math.clamp(scale + wheel * S.SCALE_STEP, S.SCALE_MIN, S.SCALE_MAX)
             if S.winScale then S.winScale[key] = scale end
         end
@@ -108,13 +116,15 @@ function S.applyScaleInput(id)
         end
     end
 
-    S._zoomGuard[id] = false
+    S._zoomBlocked[id] = false
     S.scale = scale
     return scale
 end
 
-local function accessor(title)
-    local cached = S._accessors[title]
+
+
+local function findWindowHandle(title)
+    local cached = S._windowHandles[title]
     if cached and cached:valid() then return cached end
 
     local windows = ac.getAppWindows()
@@ -122,7 +132,7 @@ local function accessor(title)
         local window = windows[i]
         if window and window.title == title then
             local handle = ac.accessAppWindow(window.name)
-            S._accessors[title] = handle
+            S._windowHandles[title] = handle
             return handle
         end
     end
@@ -130,28 +140,33 @@ local function accessor(title)
     return nil
 end
 
+
+-- makes sure windows are on screen
 function S.clampToScreen(name)
     if ui.mouseDown(ui.MouseButton.Left) then return end
 
-    local window = accessor(name)
+    local window = findWindowHandle(name)
     if not window then return end
 
     local pos = window:position()
     local size = window:size()
+
     local uiState = ac.getUI()
     local screen = uiState.windowSize * uiState.uiScale
 
     local clampedX = math.clamp(pos.x, 0, math.max(0, screen.x - size.x))
     local clampedY = math.clamp(pos.y, 0, math.max(0, screen.y - size.y))
+
     if math.abs(clampedX - pos.x) > 0.5 or math.abs(clampedY - pos.y) > 0.5 then
         pcall(function() window:move(vec2(clampedX, clampedY)) end)
     end
 end
 
+
 function S.beginWindow(name, id, baseSize)
     local scale = S.applyScaleInput(id)
 
-    local window = accessor(name)
+    local window = findWindowHandle(name)
     if window then
         local pixelSize = baseSize * (scale * ac.getUI().uiScale)
         pcall(function() window:resize(pixelSize) end)
@@ -161,12 +176,13 @@ function S.beginWindow(name, id, baseSize)
     return scale
 end
 
+
 function S.sizeResizableWindow(name, id, baseWidth, minHeight, maxHeight)
     local heightKey = 'height_' .. id
     local height = math.clamp((S.winScale and S.winScale[heightKey]) or minHeight, minHeight, maxHeight)
     if S.winScale then S.winScale[heightKey] = height end
 
-    local window = accessor(name)
+    local window = findWindowHandle(name)
     if window then
         local pixelSize = vec2(baseWidth, height) * (S.scale * ac.getUI().uiScale)
         pcall(function() window:resize(pixelSize) end)
@@ -176,22 +192,27 @@ function S.sizeResizableWindow(name, id, baseWidth, minHeight, maxHeight)
     return height
 end
 
+
+-- creates the change height grip for windows
 function S.resizeHandle(id, windowSize, minHeight, maxHeight)
     S.resizeHint(windowSize)
 
     local gripSize = 20
     ui.setCursor(vec2(windowSize.x - gripSize, windowSize.y - gripSize) * S.scale)
     ui.invisibleButton('##resize_' .. id, vec2(gripSize, gripSize) * S.scale)
+
     if ui.itemHovered() or ui.itemActive() then
         ui.setMouseCursor(ui.MouseCursor.ResizeNS)
     end
 
     if ui.itemActive() then
         local cursorHeight = (ui.mousePos().y - ui.windowPos().y) / S.scale
+
         if not S._resizeActive[id] then
             S._resizeGrab[id] = windowSize.y - cursorHeight
             S._resizeActive[id] = true
         end
+
         local newHeight = cursorHeight + (S._resizeGrab[id] or 0)
         if S.winScale then
             S.winScale['height_' .. id] = math.clamp(newHeight, minHeight, maxHeight)
@@ -201,8 +222,8 @@ function S.resizeHandle(id, windowSize, minHeight, maxHeight)
     end
 end
 
-S.WINDOW_IDS = { 'lmt_main', 'lmt_timing', 'lmt_routes', 'lmt_delta', 'lmt_settings' }
 
+-- puts every window zoom back to 100%
 function S.resetAllScales()
     if not S.winScale then return end
     for _, id in ipairs(S.WINDOW_IDS) do
@@ -211,6 +232,7 @@ function S.resetAllScales()
     S.winScale.scale_banner = 1.0
 end
 
+-- scaling helpers
 function S.cursor(pos)
     ui.setCursor(pos * S.scale)
 end
@@ -223,7 +245,7 @@ function S.itemWidth(width)
     ui.setNextItemWidth(width * S.scale)
 end
 
-function S.availX()
+function S.availableWidth()
     return ui.availableSpaceX() / S.scale
 end
 
@@ -247,22 +269,26 @@ function S.circle(center, radius, color)
     ui.drawCircleFilled(center * S.scale, radius * S.scale, color)
 end
 
-function S.dclip(str, size, p1, p2, alignX, alignY, wrap, color)
+function S.textClipped(str, size, p1, p2, alignX, alignY, wrap, color)
     ui.dwriteDrawTextClipped(str, size * S.scale, p1 * S.scale, p2 * S.scale, alignX, alignY, wrap, color)
 end
 
-function S.child(id, pos, size, body)
+-- scrollable area
+function S.scrollArea(id, pos, size, body)
     local currentWindowId = S._currentWindowId
+
     ui.setCursor(pos * S.scale)
+
     ui.pushStyleVar(ui.StyleVar.WindowPadding, vec2(0, 0))
     ui.childWindow(id, size * S.scale, false, function()
         body()
         if currentWindowId and ui.windowHovered() and ui.getScrollMaxY() > 0 then
-            S._zoomGuard[currentWindowId] = true
+            S._zoomBlocked[currentWindowId] = true
         end
     end)
     ui.popStyleVar()
 end
+
 
 function S.text(str, size, pos, font, color)
     ui.pushDWriteFont(font or S.fonts.regular)
@@ -272,8 +298,11 @@ end
 
 function S.textCentered(str, size, y, width, font, color, xOffset)
     ui.pushDWriteFont(font or S.fonts.regular)
+
     local textSize = ui.measureDWriteText(str, size)
+
     local pos = vec2((xOffset or 0) + (width - textSize.x) * 0.5, y)
+
     ui.dwriteDrawText(str, size * S.scale, pos * S.scale, color or S.colors.text)
     ui.popDWriteFont()
     return textSize
@@ -294,14 +323,18 @@ function S.measure(str, size, font)
     return textSize
 end
 
+
+-- build a rounded rec path
 function S.roundedRectPath(p1, p2, rounding, segments)
     segments = segments or 14
+
     local scale = S.scale
     p1 = p1 * scale
     p2 = p2 * scale
     rounding = rounding * scale
 
     local radius = math.min(rounding, (p2.x - p1.x) * 0.5, (p2.y - p1.y) * 0.5)
+
     local quarterTurn = math.pi * 0.5
     ui.pathArcTo(vec2(p1.x + radius, p1.y + radius), radius, math.pi, math.pi + quarterTurn, segments)
     ui.pathArcTo(vec2(p2.x - radius, p1.y + radius), radius, math.pi + quarterTurn, math.pi * 2, segments)
@@ -309,6 +342,8 @@ function S.roundedRectPath(p1, p2, rounding, segments)
     ui.pathArcTo(vec2(p1.x + radius, p2.y - radius), radius, quarterTurn, math.pi, segments)
 end
 
+
+-- fill the rounded rec path
 function S.panel(p1, p2, rounding, fill, border)
     rounding = rounding or 16
     S.roundedRectPath(p1, p2, rounding)
@@ -317,11 +352,13 @@ function S.panel(p1, p2, rounding, fill, border)
     ui.pathStroke(border or S.colors.border, true, 1 * S.scale)
 end
 
+
 function S.windowBackground(size, rounding)
     S.panel(vec2(1, 1), vec2(size.x - 1, size.y - 1), rounding or 16)
 end
 
-function S.closeX(size, windowTitle)
+
+function S.closeButton(size, windowTitle)
     local buttonSize = 24
     local margin = 12
     local top = 12
@@ -335,22 +372,25 @@ function S.closeX(size, windowTitle)
     S.image('assets/Close.png',
         vec2(buttonX + 4, top + 4),
         vec2(buttonX + buttonSize - 4, top + buttonSize - 4),
-        hovered and S.colors.text or S.colors.textDim)
+        hovered and S.colors.text or S.colors.textDim
+    )
 
-    if clicked then S.closeWindow(windowTitle) end
+    if clicked then S.hideWindow(windowTitle) end
 end
 
-function S.header(title, size, opts)
-    opts = opts or {}
+
+function S.header(title, size, options)
+    options = options or {}
     local padding = 16
     local y = 14
 
     S.text(title, 19, vec2(padding, y), S.head.bold, S.colors.text)
-    if opts.windowTitle then S.closeX(size, opts.windowTitle) end
+    if options.windowTitle then S.closeButton(size, options.windowTitle) end
     S.line(vec2(padding, y + 34), vec2(size.x - padding, y + 34), S.colors.line, 1)
 
     return y + 48
 end
+
 
 function S.backArrow(id)
     local buttonSize = 24
@@ -372,54 +412,56 @@ function S.backArrow(id)
     return clicked
 end
 
-function S.button(id, label, pos, size, opts)
-    opts = opts or {}
+
+function S.button(id, label, pos, size, options)
+    options = options or {}
     local scale = S.scale
 
     ui.setCursor(pos * scale)
     local clicked = ui.invisibleButton(id, size * scale)
-    local hovered = ui.itemHovered() or opts.forceHover
-    local hoverShift = hovered and not opts.flat
-    local rounding = opts.rounding or 6
+    local hovered = ui.itemHovered() or options.forceHover
+    local hoverShift = hovered and not options.flat
+    local rounding = options.rounding or 6
 
     local background
-    if opts.disabled then
+    if options.disabled then
         background = rgbm(0.1, 0.1, 0.1, 0.6)
-    elseif opts.primary then
+    elseif options.primary then
         background = hoverShift and S.colors.accentHover or S.colors.accent
-    elseif opts.danger then
+    elseif options.danger then
         background = hoverShift and S.colors.redHover or S.colors.red
-    elseif opts.flat then
+    elseif options.flat then
         background = hovered and S.colors.border or S.colors.buttonFlat
     else
         background = hovered and S.colors.buttonHover or S.colors.button
     end
     S.rectFill(pos, pos + size, background, rounding)
 
-    if opts.outline then
-        local outlineColor = opts.outline == true and S.colors.border or opts.outline
+    if options.outline then
+        local outlineColor = options.outline == true and S.colors.border or options.outline
         S.rect(pos, pos + size, outlineColor, rounding, ui.CornerFlags.All, 1)
     end
 
-    local fontSize = opts.fontSize or 15
+    local fontSize = options.fontSize or 15
     local textColor
-    if opts.disabled then
+    if options.disabled then
         textColor = S.colors.textFaint
-    elseif opts.textColor then
-        textColor = opts.textColor
-    elseif opts.primary then
+    elseif options.textColor then
+        textColor = options.textColor
+    elseif options.primary then
         textColor = rgbm(0.05, 0.1, 0.05, 1)
     else
         textColor = S.colors.text
     end
 
-    local labelFont = opts.font or S.fonts.medium
+    local labelFont = options.font or S.fonts.medium
     local textSize = S.measure(label, fontSize, labelFont)
     S.text(label, fontSize, pos + (size - textSize) * 0.5, labelFont, textColor)
 
-    if hovered and not opts.disabled then ui.setMouseCursor(ui.MouseCursor.Hand) end
-    return clicked and not opts.disabled
+    if hovered and not options.disabled then ui.setMouseCursor(ui.MouseCursor.Hand) end
+    return clicked and not options.disabled
 end
+
 
 function S.toggle(id, pos, value, size)
     size = size or vec2(40, 22)
@@ -433,7 +475,6 @@ function S.toggle(id, pos, value, size)
 
     local knobX = value and (pos.x + size.x - radius) or (pos.x + radius)
     S.circle(vec2(knobX, pos.y + radius), radius - 3, rgbm(1, 1, 1, 1))
-
     if clicked then return not value end
     return value
 end
@@ -442,7 +483,8 @@ function S.field(p1, p2, rounding)
     S.rectFill(p1, p2, S.colors.field, rounding or 6)
 end
 
-function S.closeWindow(title)
+
+function S.hideWindow(title)
     local windows = ac.getAppWindows()
     for i = 1, #windows do
         local window = windows[i]
@@ -454,10 +496,10 @@ function S.closeWindow(title)
     end
 end
 
-function S.splitList(str)
+
+function S.splitCommaList(str)
     local items = {}
     if not str then return items end
-
     for part in tostring(str):gmatch('[^,]+') do
         local trimmed = part:gsub('^%s+', ''):gsub('%s+$', '')
         if trimmed ~= '' then
@@ -468,7 +510,6 @@ function S.splitList(str)
     return items
 end
 
-S.TRAFFIC_TYPES = { 'Light', 'Realistic', 'Heavy', 'Rush Hour' }
 
 function S.serverName()
     local ok, name = pcall(ac.getServerName)
@@ -476,28 +517,33 @@ function S.serverName()
     return ''
 end
 
-local function normalize(text)
+
+local function normalizeText(text)
     return text:lower():gsub('%s', '')
 end
 
+
 function S.isNoHesi()
-    return normalize(S.serverName()):find('nohesi', 1, true) ~= nil
+    return normalizeText(S.serverName()):find('nohesi', 1, true) ~= nil
 end
 
+
 function S.serverHasTraffic(traffic)
-    local allowedKinds = S.splitList(traffic)
+    local allowedKinds = S.splitCommaList(traffic)
     if #allowedKinds == 0 then return true end
+
     if not S.isNoHesi() then return true end
 
-    local serverText = normalize(S.serverName())
+    local serverText = normalizeText(S.serverName())
     for _, kind in ipairs(allowedKinds) do
-        if serverText:find(normalize(kind .. ' Traffic'), 1, true) ~= nil then
+        if serverText:find(normalizeText(kind .. ' Traffic'), 1, true) ~= nil then
             return true
         end
     end
 
     return false
 end
+
 
 function S.resizeHint(windowSize)
     local hintSize = 14
@@ -506,12 +552,16 @@ function S.resizeHint(windowSize)
     S.image('assets/Resize.png', p1, p2, S.colors.textFaint)
 end
 
+
 function S.formatTime(seconds)
     if seconds == nil then return '--:--.---' end
+
     local minutes = math.floor(seconds / 60)
     local remainder = seconds - minutes * 60
+
     return string.format('%d:%06.3f', minutes, remainder)
 end
+
 
 function S.formatDelta(delta)
     if delta == nil then return '' end

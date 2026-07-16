@@ -22,12 +22,14 @@ local preview = { text = 'Drag to position notifications', icon = 'assets/Yellow
 
 function banner.init() end
 
+
 local function bannerSize(info, bannerScale)
     local textWidth = S.measure(info.text, FONT_SIZE * bannerScale, S.head.bold).x
     local width = (PADDING_X * 2 + ICON_SIZE + GAP) * bannerScale + textWidth
     local height = BANNER_HEIGHT * bannerScale
     return width, height
 end
+
 
 local function drawBannerAt(info, x, y, bannerWidth, bannerHeight, bannerScale)
     local accent = accents[info.accent] or accents.red
@@ -39,12 +41,15 @@ local function drawBannerAt(info, x, y, bannerWidth, bannerHeight, bannerScale)
 
     S.text(info.text, FONT_SIZE * bannerScale,
         vec2(x + (PADDING_X + ICON_SIZE + GAP) * bannerScale, y + (bannerHeight - FONT_SIZE * bannerScale) * 0.5 - 1),
-        S.head.bold, S.colors.text)
+        S.head.bold, S.colors.text
+    )
 end
+
 
 function banner.draw()
     local appSettings = S.settings
     if not appSettings then return end
+
     S.scale = 1
     local adjusting = appSettings.adjustNotifyPos
 
@@ -52,6 +57,7 @@ function banner.draw()
     if appSettings.showNotifications == false then
         info = nil
     end
+
     if not info and not adjusting then return end
     info = info or preview
 
@@ -61,18 +67,21 @@ function banner.draw()
 
     local centerX = math.clamp(appSettings.notifyX * screen.x, bannerWidth * 0.5, screen.x - bannerWidth * 0.5)
     local centerY = math.clamp(appSettings.notifyY * screen.y, bannerHeight * 0.5, screen.y - bannerHeight * 0.5)
+
     local x = centerX - bannerWidth * 0.5
     local y = centerY - bannerHeight * 0.5
 
     if adjusting then
         local mouse = ui.mousePos()
         local over = mouse.x >= x and mouse.x <= x + bannerWidth and mouse.y >= y and mouse.y <= y + bannerHeight
+
         if over then
             local wheel = ui.mouseWheel()
             if wheel ~= 0 and S.winScale then
                 S.winScale.scale_banner = math.clamp(bannerScale + wheel * S.SCALE_STEP, S.SCALE_MIN, S.SCALE_MAX)
             end
         end
+
         if ui.mouseClicked(ui.MouseButton.Left) and over then
             dragging = true
             dragOffsetX = mouse.x - x
@@ -81,6 +90,7 @@ function banner.draw()
         if not ui.mouseDown(ui.MouseButton.Left) then
             dragging = false
         end
+
         if dragging then
             centerX = math.clamp(mouse.x - dragOffsetX + bannerWidth * 0.5, bannerWidth * 0.5, screen.x - bannerWidth * 0.5)
             centerY = math.clamp(mouse.y - dragOffsetY + bannerHeight * 0.5, bannerHeight * 0.5, screen.y - bannerHeight * 0.5)
